@@ -12,21 +12,23 @@ endif()
 
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(std_msgs REQUIRED)
 
-add_executable(motor
-  src/motor.cpp
+add_executable(omni_control
+  src/omni_control.cpp
 )
 
-ament_target_dependencies(motor
+ament_target_dependencies(omni_control
   rclcpp
+  std_msgs
 )
 
-target_link_libraries(motor
+target_link_libraries(omni_control
   wiringPi
 )
 
 install(TARGETS
-  motor
+  omni_control
   DESTINATION lib/${PROJECT_NAME}
 )
 
