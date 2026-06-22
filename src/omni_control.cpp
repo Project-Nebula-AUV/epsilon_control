@@ -64,7 +64,7 @@ int main(int argc, char **argv)
 {
     rclcpp::init(argc, argv);
 
-    std::array<int,12> pins = {17,18, 25,23, 4,14, 20,26, 9,22, 6,12};
+    std::array<int,12> pins = {17,18, 25,23, 4,14, 20,26, 9,22, 6,5};
     if (argc == 13) {
         for (int i = 0; i < 12; ++i) {
             pins[i] = std::stoi(argv[i+1]);
