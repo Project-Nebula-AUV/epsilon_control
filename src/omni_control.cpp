@@ -2,7 +2,19 @@
 #include <std_msgs/msg/float64_multi_array.hpp>
 #include <wiringPi.h>
 #include <softPwm.h>
-#include <vector>
+
+#include <algorithm>
+#include <array>
+#include <chrono>
+
+// Drives the 6 thruster H-bridges (2 GPIO pins each: forward, backward) with
+// software PWM from /thrust_control (Float64MultiArray[6], -100..100).
+//
+// Safety: this node is the LAST hop before the motors, so it carries its own
+// watchdog. The upstream thruster_bridge publishes continuously (commands at
+// 50 Hz when armed, zeros from its own watchdog when idle), so a silent
+// /thrust_control means the bridge itself died -- after 0.25 s of silence all
+// PWM outputs are zeroed until fresh commands arrive.
 
 class OmniControllerNode : public rclcpp::Node
 {
@@ -23,41 +35,72 @@ public:
             "/thrust_control", 10,
             std::bind(&OmniControllerNode::thrustControlCallback, this, std::placeholders::_1)
         );
+
+        watchdog_ = this->create_wall_timer(
+            std::chrono::milliseconds(100),
+            std::bind(&OmniControllerNode::watchdogTick, this));
     }
 
     ~OmniControllerNode()
+    {
+        zeroAll();
+    }
+
+private:
+    void zeroAll()
     {
         for (int pin : pins_) {
             softPwmWrite(pin, 0);
         }
     }
 
-private:
     void thrustControlCallback(const std_msgs::msg::Float64MultiArray::SharedPtr msg)
     {
-        std::vector<double> cmd = msg->data;
+        if (msg->data.size() < 6) {
+            RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+                "/thrust_control had %zu elements (<6); ignoring", msg->data.size());
+            return;
+        }
 
         for (size_t i = 0; i < 6; ++i) {
-            double pwm = cmd[i];
+            double pwm = msg->data[i];
 
             int forward_pin = pins_[i*2];
             int backward_pin = pins_[i*2 + 1];
 
             if (pwm >= 0) {
-                softPwmWrite(forward_pin, std::min(static_cast<int>(pwm),100));
+                softPwmWrite(forward_pin, std::min(static_cast<int>(pwm), 100));
                 softPwmWrite(backward_pin, 0);
             } else {
                 softPwmWrite(forward_pin, 0);
-                softPwmWrite(backward_pin, std::min(static_cast<int>(-pwm),100));
+                softPwmWrite(backward_pin, std::min(static_cast<int>(-pwm), 100));
             }
+        }
 
-            RCLCPP_INFO(this->get_logger(), "Thruster %d PWM: %f", static_cast<int>(i), pwm);
+        got_cmd_ = true;
+        stale_ = false;
+        last_cmd_ = this->now();
+    }
+
+    void watchdogTick()
+    {
+        if (!got_cmd_ || stale_) {
+            return;  // nothing commanded yet (outputs still at init zeros) or already zeroed
+        }
+        if ((this->now() - last_cmd_).seconds() > 0.25) {
+            zeroAll();
+            stale_ = true;
+            RCLCPP_WARN(this->get_logger(),
+                "/thrust_control silent >0.25s: all PWM zeroed (upstream bridge dead?)");
         }
     }
 
     std::array<int,12> pins_;
-    std::array<std::array<int,6>,6> allocation_;
+    rclcpp::Time last_cmd_;
+    bool got_cmd_ = false;
+    bool stale_ = false;
     rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr sub_;
+    rclcpp::TimerBase::SharedPtr watchdog_;
 };
 
 int main(int argc, char **argv)
